@@ -27,8 +27,8 @@ my $client = IO::Socket::INET->new(
 	LocalPort => 'bootpc',
 ) or die "client socket: $!";
 
-my $BRDCAST_TO_SERVER = sockaddr_in(67, inet_aton('255.255.255.255'));
-my $BRDCAST_TO_CLIENT = sockaddr_in(68, inet_aton('255.255.255.255'));
+my $BRDCAST_TO_SERVER = sockaddr_in(67, INADDR_BROADCAST);
+my $BRDCAST_TO_CLIENT = sockaddr_in(68, INADDR_BROADCAST);
 
 my $select = new IO::Select($client, $server) or die "IO::Select: $!";
 
@@ -177,14 +177,17 @@ sub printTowelStatus {
 	print "\n";
 }
 
+my $lastupdate = 0;
 while (1) {
-	refreshTowels();
-	while (my @h = $select->can_read(1)) {
+	if (time() > $lastupdate+10) {
+		$lastupdate = time();
+		refreshTowels();
+	}
+	if (my @h = $select->can_read(2)) {
 		readResponse($_) for @h;
 	}
 	while (countTowels()<$n_towels) {
 		addTowel();
 	}
 	printTowelStatus();
-	sleep 2;
 }
