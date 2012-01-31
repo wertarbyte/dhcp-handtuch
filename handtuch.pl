@@ -46,7 +46,7 @@ sub sendDiscover {
 	# create DHCP Packet
 	$xid = $xid // int(rand(0xFFFFFFFF));
 	$hw = $hw // ($towel{$xid}{packet} && $towel{$xid}{packet}->chaddr) // int(rand(0xFFFFFFFF));
-	print "-> DHCPDISCOVER $xid\n";
+	#print "-> DHCPDISCOVER $xid\n";
 	my $discover = Net::DHCP::Packet->new(
 		Xid => $xid, # random xid
 		Flags => 0x8000,              # ask for broadcast answer
@@ -118,16 +118,17 @@ sub readResponse {
 	if ($towel{$xid} && $handle == $client) {
 		if ($packet->op == BOOTREPLY() && $packet->getOptionValue(DHO_DHCP_MESSAGE_TYPE()) == DHCPOFFER()) {
 			print "<- DHCPOFFER $xid ",(hex($xid)),"\n";
-			$towel{$xid} = { state => "OFFER", packet => $packet };
-			changeTowel($xid, "OFFER");
+			$towel{$xid}{packet} = $packet;
+			changeTowelState($xid, "OFFER");
 			sendRequest($packet);
 		} elsif ($packet->op == BOOTREPLY() && $packet->getOptionValue(DHO_DHCP_MESSAGE_TYPE()) == DHCPNAK()) {
 			print "<- DHCPNAK $xid: ".($packet->getOptionValue(DHO_DHCP_MESSAGE()))."\n";
+			changeTowelState($xid, "NAK");
 			delete $towel{$xid};
 		} elsif ($packet->op == BOOTREPLY() && $packet->getOptionValue(DHO_DHCP_MESSAGE_TYPE()) == DHCPACK()) {
 			print "<- DHCPACK $xid\n";
-			$towel{$xid} = { state => "ACK", packet => $packet };
-			changeTowel($xid, "ACK");
+			$towel{$xid}{packet} = $packet;
+			changeTowelState($xid, "ACK");
 			print "Reserved ".(countTowels("ACK"))." addresses from the pool.\n";
 		} else {
 			print $packet->toString();
