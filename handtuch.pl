@@ -90,6 +90,20 @@ sub findFreeTowel {
 	return undef;
 }
 
+sub splicePacket {
+	my ($template, $type) = @_;
+	my $res = new Net::DHCP::Packet($template->serialize());
+	if ($type) {
+		$res->removeOption(DHO_DHCP_MESSAGE_TYPE());
+		$res->addOptionValue(DHO_DHCP_MESSAGE_TYPE(), $type);
+	}
+	if ($gateway) {
+		$res->removeOption(DHO_ROUTERS());
+		$res->addOptionValue(DHO_ROUTERS(), inet_ntoa($gateway));
+	}
+	return $res;
+}
+
 sub offerTowel {
 	my ($packet) = @_;
 	my $towel_id = findFreeTowel();
@@ -97,13 +111,9 @@ sub offerTowel {
 		print "Unable to find a suitable towel\n";
 		return;
 	}
-	my $offer = new Net::DHCP::Packet($towel{$towel_id}{packet}->serialize());
+	my $offer = splicePacket($towel{$towel_id}{packet}, DHCPOFFER());
 	$offer->xid($packet->xid);
 	$offer->chaddr($packet->chaddr);
-	$offer->removeOption(DHO_DHCP_MESSAGE_TYPE());
-	$offer->addOptionValue(DHO_DHCP_MESSAGE_TYPE(), DHCPOFFER());
-	$offer->removeOption(DHO_ROUTERS());
-	$offer->addOptionValue(DHO_ROUTERS(), inet_ntoa($gateway));
 
 	$server->send($offer->serialize(), undef, $BRDCAST_TO_CLIENT);
 	$victim{$packet->xid()} = $towel_id;
@@ -117,13 +127,9 @@ sub ackRequest {
 		print "No registered towel\n";
 		return;
 	}
-	my $ack = new Net::DHCP::Packet($towel{$towel_id}{packet}->serialize());
+	my $ack = splicePacket($towel{$towel_id}{packet}, DHCPACK());
 	$ack->xid($packet->xid);
 	$ack->chaddr($packet->chaddr);
-	$ack->removeOption(DHO_DHCP_MESSAGE_TYPE());
-	$ack->addOptionValue(DHO_DHCP_MESSAGE_TYPE(), DHCPACK());
-	$ack->removeOption(DHO_ROUTERS());
-	$ack->addOptionValue(DHO_ROUTERS(), inet_ntoa($gateway));
 
 	$server->send($ack->serialize(), undef, $BRDCAST_TO_CLIENT);
 	print "-> DHCPACK ", $packet->xid, " (towel ", $towel_id, ")\n";
