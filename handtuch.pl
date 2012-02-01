@@ -1,5 +1,4 @@
 #!/usr/bin/perl
-# Simple DHCP client - sending a broadcasted DHCP Discover request
 
 use strict;
 
