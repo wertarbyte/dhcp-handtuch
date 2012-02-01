@@ -7,8 +7,19 @@ use IO::Select;
 use Net::DHCP::Packet;
 use Net::DHCP::Constants;
 use Time::HiRes qw( usleep );
+use Getopt::Long;
 
-my $n_towels = $ARGV[0] // 10;
+my ($n_towels, $gateway_string, $gateway) = (10, undef, undef);
+
+GetOptions(
+	"towels=i"  => \$n_towels,
+	"gateway=s" => \$gateway_string
+) || die "Error parsing command line: $!";
+
+if (defined $gateway_string) {
+	$gateway = inet_aton($gateway_string);
+	print "Gateway: ", inet_ntoa($gateway), "\n";
+}
 
 my %towel;
 
@@ -21,8 +32,6 @@ my $server = IO::Socket::INET->new(
 	Broadcast => 1,
 ) or die "server socket: $!";
 
-my $gateway = inet_aton($ARGV[1]) // $server->sockaddr;
-print "Gateway: ", inet_ntoa($gateway), "\n";
 
 my $client = IO::Socket::INET->new(
 	Proto => 'udp',
