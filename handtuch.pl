@@ -4,6 +4,7 @@
 
 use strict;
 
+use POSIX;
 use IO::Socket::INET;
 use IO::Select;
 use Net::DHCP::Packet;
@@ -11,13 +12,14 @@ use Net::DHCP::Constants;
 use Time::HiRes qw( usleep );
 use Getopt::Long;
 
-my ($n_towels, $n_discoverer, $gateway_string, $gateway, $expire) = (10, 0, undef, undef, 60);
+my ($n_towels, $n_discoverer, $gateway_string, $gateway, $expire, $user) = (10, 0, undef, undef, 60, undef);
 
 GetOptions(
 	"towels=i"     => \$n_towels,
 	"discoverers=i" => \$n_discoverer,
 	"gateway=s"    => \$gateway_string,
 	"expire=i"     => \$expire,
+	"user=s"        => \$user,
 ) || die "Error parsing command line: $!";
 
 if (defined $gateway_string) {
@@ -42,6 +44,12 @@ my $client = IO::Socket::INET->new(
 	Broadcast => 1,
 	LocalPort => 'bootpc',
 ) or die "client socket: $!";
+
+if (defined $user) {
+	my $uid = getpwnam($user);
+	unless (defined $uid) {die "Unable to find user $user!\n"};
+	POSIX::setuid($uid) || die "Unable to change to uid $uid ($user)!\n";
+}
 
 my $BRDCAST_TO_SERVER = sockaddr_in(67, INADDR_BROADCAST);
 my $BRDCAST_TO_CLIENT = sockaddr_in(68, INADDR_BROADCAST);
