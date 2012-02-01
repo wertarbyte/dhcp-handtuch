@@ -1,4 +1,6 @@
 #!/usr/bin/perl
+#
+# handtuch.pl - DHCP man-in-the-middle tool by Stefan Tomanek <stefan@pico.ruhr.de>
 
 use strict;
 
