@@ -187,11 +187,7 @@ sub refreshTowels {
 }
 
 sub addTowel {
-	$towel{int(rand(0xFFFFFFFF))} = { state => "", packet => undef };
-}
-
-for (1..$n_towels) {
-	addTowel();
+	$towel{int(rand(0xFFFFFFFF))} = { state => "DISCOVER", packet => undef };
 }
 
 sub printTowelStatus {
@@ -209,6 +205,9 @@ while (1) {
 		readResponse($_) for @h;
 	}
 	while (countTowels()<$n_towels) {
+		addTowel();
+	}
+	while ($n_towels < 0 && countTowels("")+countTowels("DISCOVER") < abs($n_towels)) {
 		addTowel();
 	}
 	printTowelStatus();
