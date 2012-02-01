@@ -9,11 +9,13 @@ use Net::DHCP::Constants;
 use Time::HiRes qw( usleep );
 use Getopt::Long;
 
-my ($n_towels, $gateway_string, $gateway) = (10, undef, undef);
+my ($n_towels, $n_discoverer, $gateway_string, $gateway, $expire) = (10, 0, undef, undef, 60);
 
 GetOptions(
-	"towels=i"  => \$n_towels,
-	"gateway=s" => \$gateway_string
+	"towels=i"     => \$n_towels,
+	"discoverers=i" => \$n_discoverer,
+	"gateway=s"    => \$gateway_string,
+	"expire=i"     => \$expire,
 ) || die "Error parsing command line: $!";
 
 if (defined $gateway_string) {
@@ -52,14 +54,14 @@ sub changeTowelState {
 	$towel{$xid}{state} = $state;
 	unless ($old eq $state) {
 		printTowelStatus();
+		$towel{$xid}{ts} = time();
 	}
 }
 
 sub sendDiscover {
-	my ($xid, $hw) = @_;
+	my ($xid) = @_;
 	# create DHCP Packet
-	$xid = $xid // int(rand(0xFFFFFFFF));
-	$hw = $hw // ($towel{$xid}{packet} && $towel{$xid}{packet}->chaddr) // sprintf("%X", $towel_start_mac++);
+	my $hw = ($towel{$xid}{packet} && $towel{$xid}{packet}->chaddr) // sprintf("%X", $towel_start_mac++);
 	#print "-> DHCPDISCOVER $xid for $hw\n";
 	my $discover = Net::DHCP::Packet->new(
 		Xid => $xid, # random xid
@@ -67,8 +69,8 @@ sub sendDiscover {
 		Chaddr => $hw,
 		DHO_DHCP_MESSAGE_TYPE() => DHCPDISCOVER()
 	);
+	$towel{$xid}{packet} = $discover;
 	changeTowelState($xid, "DISCOVER");
-	$towel{$xid} = { state => "DISCOVER", packet => $discover };
 	# send packet
 	$client->send($discover->serialize(), undef, $BRDCAST_TO_SERVER)
 	       or die "Error sending DHCPDISCOVER: $!\n";
@@ -193,8 +195,14 @@ sub refreshTowels {
 	for my $xid (keys %towel) {
 		my $state = $towel{$xid}{state};
 		if ($state eq "DISCOVER" || !$state) {
-			# retransmit DHCPDISCOVER
-			sendDiscover($xid);
+			my $age = (time()-$towel{$xid}{ts});
+			if ($age > $expire && countTowels("DISCOVER") > $n_discoverer) {
+				print "Towel $xid is $age seconds old, expiring\n";
+				delete $towel{$xid};
+			} else {
+				# retransmit DHCPDISCOVER
+				sendDiscover($xid);
+			}
 		} elsif ($state eq "OFFER") {
 			sendRequest($towel{$xid}{packet});
 		}
@@ -202,7 +210,7 @@ sub refreshTowels {
 }
 
 sub addTowel {
-	$towel{int(rand(0xFFFFFFFF))} = { state => "DISCOVER", packet => undef };
+	$towel{int(rand(0xFFFFFFFF))} = { state => "DISCOVER", packet => undef, ts => time() };
 }
 
 sub printTowelStatus {
@@ -210,8 +218,14 @@ sub printTowelStatus {
 	print "\n";
 }
 
+# create initial requests
+for (1..$n_towels) {
+	addTowel();
+}
+
 my $lastupdate = 0;
 while (1) {
+	printTowelStatus();
 	if (time() > $lastupdate+10) {
 		$lastupdate = time();
 		refreshTowels();
@@ -219,11 +233,7 @@ while (1) {
 	if (my @h = $select->can_read(2)) {
 		readResponse($_) for @h;
 	}
-	while (countTowels()<$n_towels) {
+	while (countTowels("DISCOVER") < abs($n_discoverer)) {
 		addTowel();
 	}
-	while ($n_towels < 0 && countTowels("")+countTowels("DISCOVER") < abs($n_towels)) {
-		addTowel();
-	}
-	printTowelStatus();
 }
